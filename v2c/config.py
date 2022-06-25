@@ -50,6 +50,11 @@ class Config(object):
     # Size for Vocabulary
     VOCAB_SIZE = None
 
+    # TCN module layers' channel size
+    CHANNEL_SIZES = [2048, 1024, 512]
+    
+    # Number of action classess
+    NUM_CLASSES = 47
     # Size for video observation window
     WINDOW_SIZE = 30
 

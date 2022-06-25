@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import models
 from v2c.backbone import resnet
+from torch.nn.utils import weight_norm
 
 # ----------------------------------------
 # Functions for Video Feature Extraction
@@ -56,6 +57,72 @@ class CNNWrapper(nn.Module):
         model = nn.Sequential(*modules)
         
         return model
+
+# ----------------------------------------
+# TCN Module
+# ----------------------------------------
+
+class Chomp1d(nn.Module):
+    def __init__(self, chomp_size):
+        super(Chomp1d, self).__init__()
+        self.chomp_size = chomp_size
+
+    def forward(self, x):
+        return x[:, :, :-self.chomp_size].contiguous()
+
+
+class TemporalBlock(nn.Module):
+    def __init__(self, n_inputs, n_outputs, kernel_size, stride, dilation, padding, dropout=0.2):
+        super(TemporalBlock, self).__init__()
+        self.conv1 = weight_norm(nn.Conv1d(n_inputs, n_outputs, kernel_size,
+                                           stride=stride, padding=padding, dilation=dilation))
+        self.chomp1 = Chomp1d(padding)
+        self.relu1 = nn.ReLU()
+        self.dropout1 = nn.Dropout(dropout)
+
+        self.conv2 = weight_norm(nn.Conv1d(n_outputs, n_outputs, kernel_size,
+                                           stride=stride, padding=padding, dilation=dilation))
+        self.chomp2 = Chomp1d(padding)
+        self.relu2 = nn.ReLU()
+        self.dropout2 = nn.Dropout(dropout)
+
+        self.net = nn.Sequential(self.conv1, self.chomp1, self.relu1, self.dropout1,
+                                 self.conv2, self.chomp2, self.relu2, self.dropout2)
+        self.downsample = nn.Conv1d(n_inputs, n_outputs, 1) if n_inputs != n_outputs else None
+        self.relu = nn.ReLU()
+        self.init_weights()
+
+    def init_weights(self):
+        self.conv1.weight.data.normal_(0, 0.01)
+        self.conv2.weight.data.normal_(0, 0.01)
+        if self.downsample is not None:
+            self.downsample.weight.data.normal_(0, 0.01)
+
+    def forward(self, x):
+        out = self.net(x)
+        res = x if self.downsample is None else self.downsample(x)
+        return self.relu(out + res)
+
+
+class TemporalConvNet(nn.Module):
+    def __init__(self, num_inputs, num_channels, num_classes, kernel_size=2, dropout=0.2):
+        super(TemporalConvNet, self).__init__()
+        layers = []
+        num_levels = len(num_channels)
+        for i in range(num_levels):
+            dilation_size = 2 ** i
+            in_channels = num_inputs if i == 0 else num_channels[i - 1]
+            out_channels = num_channels[i]
+            layers += [TemporalBlock(in_channels, out_channels, kernel_size, stride=1, dilation=dilation_size,
+                                     padding=(kernel_size - 1) * dilation_size, dropout=dropout)]
+
+        self.network = nn.Sequential(*layers)
+        self.linear = nn.Linear(num_channels[-1], num_classes)
+
+    def forward(self, x):
+        x = self.network(x)
+        return self.linear(x)
+
 
 # ----------------------------------------
 # Functions for V2CNet
@@ -175,6 +242,19 @@ class CommandLoss(nn.Module):
                 target):
         return self.cross_entropy(input, target)
 
+class ClassificationLoss(nn.Module):
+    """Calculate Cross-entropy loss per word.
+    """
+    def __init__(self, 
+                 ignore_index=0):
+        super(ClassificationLoss, self).__init__()
+        self.cross_entropy = nn.CrossEntropyLoss()
+
+    def forward(self, 
+                input, 
+                target):
+        return self.cross_entropy(input, target)
+
 
 class Video2Command():
     """Train/Eval inference class for V2C model.
@@ -192,17 +272,32 @@ class Video2Command():
         self.command_decoder = CommandDecoder(units=self.config.UNITS,
                                               vocab_size=self.config.VOCAB_SIZE,
                                               embed_dim=self.config.EMBED_SIZE,
-                                              bias_vector=bias_vector)
+                                             bias_vector=bias_vector)
+        
+        self.kernel_size = 7
+        self.dropout = .5
+
+        self.tcn = TemporalConvNet(
+            self.config.BACKBONE["resnet50"],
+            self.config.CHANNEL_SIZES,
+            self.config.NUM_CLASSES,
+            kernel_size=self.kernel_size,
+            dropout=self.dropout)
+        
         self.video_encoder.to(self.device)
         self.command_decoder.to(self.device)
+        self.tcn.to(self.device)
     
         # Loss function
-        self.loss_objective = CommandLoss()
-        self.loss_objective.to(self.device)
+        self.loss_objectiveCMD = CommandLoss()
+        self.loss_objectiveCLS = ClassificationLoss()
+        self.loss_objectiveCMD.to(self.device)
+        self.loss_objectiveCLS.to(self.device)
 
         # Setup parameters and optimizer
         self.params = list(self.video_encoder.parameters()) + \
-                      list(self.command_decoder.parameters())
+                      list(self.command_decoder.parameters()) + \
+                      list(self.tcn.parameters())
         self.optimizer = torch.optim.Adam(self.params, 
                                           lr=self.config.LEARNING_RATE)
 
@@ -215,7 +310,7 @@ class Video2Command():
               train_loader):
         """Train the Video2Command model.
         """
-        def train_step(Xv, S):
+        def train_step(Xv, S, Ac):
             """One train step.
             """
             loss = 0.0
@@ -223,9 +318,11 @@ class Video2Command():
             self.optimizer.zero_grad()
 
             # Forward pass
+            # Classification module
+            Xc = self.tcn(Xv)
             # Video feature extraction 1st
             Xv, states = self.video_encoder(Xv)
-
+            
             # Calculate mask against zero-padding
             S_mask = S != 0
 
@@ -236,7 +333,8 @@ class Video2Command():
                 # Calculate loss per word
                 loss += self.loss_objective(probs, S[:,timestep+1])
             loss = loss / S_mask.sum()     # Loss per word
-
+            
+            loss += self.loss_objectiveCLS(Xc, Ac)
             # Gradient backward
             loss.backward()
             self.optimizer.step()
@@ -245,13 +343,15 @@ class Video2Command():
         # Training epochs
         self.video_encoder.train()
         self.command_decoder.train()
+        self.tcn.train()
+
         for epoch in range(self.config.NUM_EPOCHS):
             total_loss = 0.0
-            for i, (Xv, S, clip_names) in enumerate(train_loader):
+            for i, (Xv, S, Ac, clip_names) in enumerate(train_loader):
                 # Mini-batch
-                Xv, S = Xv.to(self.device), S.to(self.device)
+                Xv, S, Ac = Xv.to(self.device), S.to(self.device), Ac.to(self.device)
                 # Train step
-                loss = train_step(Xv, S)
+                loss = train_step(Xv, S, Ac)
                 total_loss += loss
                 # Display
                 if i % self.config.DISPLAY_EVERY == 0:
@@ -289,6 +389,7 @@ class Video2Command():
         """
         self.video_encoder.eval()
         self.command_decoder.eval()
+        self.tcn.eval()
 
         with torch.no_grad():
             # Initialize S with '<sos>'

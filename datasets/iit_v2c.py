@@ -7,6 +7,7 @@ import numpy as np
 from PIL import Image
 import torch
 from torch.utils import data
+from torch.utils.data import dataset
 
 # Root directory of the project
 ROOT_DIR = os.path.abspath("../")
@@ -20,7 +21,7 @@ import v2c.utils as utils
 # ----------------------------------------
 
 def load_annotations(dataset_path=os.path.join('datasets', 'IIT-V2C'),
-                     annotation_file='train.txt'):
+                     annotation_file='train.txt', action_file='train_actions.txt'):
     """Helper function to parse IIT-V2C dataset.
     """
     def get_frames_no(init_frame_no, end_frame_no):
@@ -31,6 +32,8 @@ def load_annotations(dataset_path=os.path.join('datasets', 'IIT-V2C'),
 
     # Read annotations
     annotations = {}
+    
+    fac = open(os.path.join(dataset_path, action_file), "r")
     with open(os.path.join(dataset_path, annotation_file), 'r') as f:
         i = 0
         annotation = []
@@ -52,11 +55,12 @@ def load_annotations(dataset_path=os.path.join('datasets', 'IIT-V2C'),
                 init_frame_no, end_frame_no = int(annotation[1].split(' ')[0]), int(annotation[1].split(' ')[1])
                 frames = get_frames_no(init_frame_no, end_frame_no)
                 command = annotation[2].strip().split(' ')
+                action = fac.readline().strip('\n')
 
                 if video_fname not in annotations:
-                    annotations[video_fname] = [[video_id, frames, command]]
+                    annotations[video_fname] = [[video_id, frames, command, action]]
                 else:
-                    annotations[video_fname].append([video_id, frames, command])
+                    annotations[video_fname].append([video_id, frames, command, action])
 
                 annotation = []
 
@@ -81,7 +85,7 @@ def clipsname_captions(annotations,
     """Get (clip_name, target) pairs from annotation.
     """
     # Parse all (inputs, captions) pair
-    clips_name, captions = [], []
+    clips_name, captions, actions = [], [], []
     for video_fname in annotations.keys():
         annotations_by_clip = annotations[video_fname]
         for annotation in annotations_by_clip:
@@ -93,11 +97,12 @@ def clipsname_captions(annotations,
                 target = '<sos> '+' '.join(annotation[2])+' <eos>'
             else:
                 target = ' '.join(annotation[2])
-
+            action = annotation[3]
             captions.append(target)
             clips_name.append(clip_name)
+            actions.append(action)
 
-    return clips_name, captions
+    return clips_name, captions, actions
 
 
 # ----------------------------------------
@@ -169,7 +174,7 @@ def imgspath_targets_v1(annotations,
         return imgs_path
 
     # Parse all (inputs, targets) pair
-    inputs, targets = [], []
+    inputs, targets, actions = [], [], []
     for video_fname in annotations.keys():
         annotations_by_clip = annotations[video_fname]
         for annotation in annotations_by_clip:
@@ -189,11 +194,13 @@ def imgspath_targets_v1(annotations,
                 target = '<sos> '+' '.join(annotation[2])+' <eos>'
             else:
                 target = ' '.join(annotation[2])
-            
+            action = annotation[3]
+
             inputs.append({clip_name: frames_path})
             targets.append(target)
+            actions.append(action)
 
-    return inputs, targets
+    return inputs, targets, actions
 
 # ----------------------------------------
 # Functions for torch.data.Dataset
@@ -201,22 +208,22 @@ def imgspath_targets_v1(annotations,
 
 def parse_dataset(config, 
                   annotation_file,
+                  action_file,
                   vocab=None,
                   numpy_features=True):
     """Parse IIT-V2C dataset and update configuration.
     """
 
     # Load annotation 1st
-    annotations = load_annotations(config.DATASET_PATH, annotation_file)
-
+    annotations = load_annotations(config.DATASET_PATH, annotation_file, action_file)
     # Pre-extracted features saved as numpy
     if numpy_features:
-        clips, captions = clipsname_captions(annotations)
+        clips, captions, actions = clipsname_captions(annotations)
         clips = [os.path.join(config.DATASET_PATH, list(config.BACKBONE.keys())[0], x + '.npy') for x in clips]
 
     # Use images
     else:
-        clips, captions = imgspath_targets_v1(annotations, 
+        clips, captions, actions = imgspath_targets_v1(annotations, 
                                               max_frames=config.WINDOW_SIZE,
                                               dataset_path=config.DATASET_PATH,
                                               folder='images',
@@ -241,7 +248,10 @@ def parse_dataset(config,
     targets = utils.pad_sequences(targets, config.MAXLEN, padding='post')
     targets = targets.astype(np.int64)
 
-    return clips, targets, vocab, config
+    d = {ni: indi for indi, ni in enumerate(set(actions))}
+    actions = [d[ni] for ni in actions]
+
+    return clips, targets, actions, vocab, config
 
 class FeatureDataset(data.Dataset):
     """Create an instance of IIT-V2C dataset with (features, targets) pre-extracted,
@@ -250,9 +260,10 @@ class FeatureDataset(data.Dataset):
     def __init__(self, 
                  inputs,
                  targets,
+                 actions,
                  numpy_features=True,
                  transform=None):
-        self.inputs, self.targets = inputs, targets     # Load annotations
+        self.inputs, self.targets, self.actions = inputs, targets, actions     # Load annotations
         self.numpy_features = numpy_features
         self.transform = transform
 
@@ -290,5 +301,5 @@ class FeatureDataset(data.Dataset):
         # Image dataset
         else:
             Xv, clip_name = self.parse_clip(self.inputs[idx])
-        S = self.targets[idx]
-        return Xv, S, clip_name
+        S, Ac = self.targets[idx], self.actions[idx]
+        return Xv, S, Ac, clip_name

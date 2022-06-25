@@ -33,7 +33,8 @@ config = TestConfig()
 # Setup tf.dataset object
 vocab = pickle.load(open(os.path.join(config.CHECKPOINT_PATH, 'vocab.pkl'), 'rb'))
 annotation_file = config.MODE + '.txt'
-clips, targets, _, config = iit_v2c.parse_dataset(config, annotation_file, vocab=vocab)
+action_file = config.MODE+'_actions.txt'
+clips, targets, actions, _, config = iit_v2c.parse_dataset(config, annotation_file, action_file, vocab=vocab)
 test_dataset = iit_v2c.FeatureDataset(clips, targets)
 test_loader = data.DataLoader(test_dataset, 
                               batch_size=config.BATCH_SIZE, 
