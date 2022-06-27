@@ -8,7 +8,7 @@ import torch
 from torch.utils import data
 
 # Root directory of the project
-ROOT_DIR = os.path.abspath("../../")
+ROOT_DIR = os.path.abspath("/content/V2C/")
 
 # Import v2c utils
 sys.path.append(ROOT_DIR)  # To find local version of the library
@@ -35,7 +35,7 @@ vocab = pickle.load(open(os.path.join(config.CHECKPOINT_PATH, 'vocab.pkl'), 'rb'
 annotation_file = config.MODE + '.txt'
 action_file = config.MODE+'_actions.txt'
 clips, targets, actions, _, config = iit_v2c.parse_dataset(config, annotation_file, action_file, vocab=vocab)
-test_dataset = iit_v2c.FeatureDataset(clips, targets)
+test_dataset = iit_v2c.FeatureDataset(clips, targets, actions)
 test_loader = data.DataLoader(test_dataset, 
                               batch_size=config.BATCH_SIZE, 
                               shuffle=False, 
@@ -55,7 +55,7 @@ checkpoint_files = sorted(glob.glob(os.path.join(config.CHECKPOINT_PATH, 'saved'
 for checkpoint_file in checkpoint_files:
     epoch = int(checkpoint_file.split('_')[-1][:-4])
     v2c_model.load_weights(checkpoint_file)
-    y_pred, y_true = v2c_model.evaluate(test_loader, vocab)
+    y_pred, y_true, ac_pred, ac_true = v2c_model.evaluate(test_loader, vocab)
 
     # Save to evaluation file
     f = open(os.path.join(config.CHECKPOINT_PATH, 'prediction', 'prediction_{}.txt'.format(epoch)), 'w')
@@ -65,9 +65,13 @@ for checkpoint_file in checkpoint_files:
         pred_command = utils.sequence_to_text(y_pred[i], vocab)
         #print(y_true[i])
         true_command = utils.sequence_to_text(y_true[i], vocab)
+        pred_action = utils.sequence_to_text(y_pred[i], vocab)
+        true_action = utils.sequence_to_text(y_true[i], vocab)
         f.write('------------------------------------------\n')
         f.write(str(i) + '\n')
         f.write(pred_command + '\n')
         f.write(true_command + '\n')
+        f.write(pred_action + '\n')
+        f.write(true_action + '\n')
 
     print('Ready for cococaption.')
