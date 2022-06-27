@@ -384,7 +384,6 @@ class Video2Command():
             y_true.append(S_true)
             ac_pred.append(Ac_pred)
             ac_true.append(Ac_true)
-
         y_pred = torch.cat(y_pred, dim=0)
         y_true = torch.cat(y_true, dim=0)
         ac_pred = torch.cat(ac_pred, dim=0)

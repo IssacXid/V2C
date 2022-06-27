@@ -239,6 +239,18 @@ def parse_dataset(config,
                                   unk_word=config.UNK_WORD)
     # Reset vocab_size
     config.VOCAB_SIZE = len(vocab)
+    
+    if config.MODE == 'train':
+      lab2ind = {ni: indi for indi, ni in enumerate(set(actions))}
+      ind2lab = {value:key for key, value in lab2ind.items()}
+      actionDict = {'lab2ind': lab2ind, 'ind2lab': ind2lab}
+      with open(os.path.join(config.CHECKPOINT_PATH, 'actionDict.pkl'), 'wb') as f:
+        pickle.dump(actionDict, f)
+    else:
+      actionDict = pickle.load(open(os.path.join(config.CHECKPOINT_PATH, 'actionDict.pkl'), 'rb'))
+      lab2ind = actionDict['lab2ind']
+      ind2lab = actionDict['ind2lab']
+
 
     if config.MAXLEN is None:
         config.MAXLEN = utils.get_maxlen(captions) 
@@ -247,11 +259,10 @@ def parse_dataset(config,
     targets = utils.texts_to_sequences(captions, vocab)
     targets = utils.pad_sequences(targets, config.MAXLEN, padding='post')
     targets = targets.astype(np.int64)
+    print(lab2ind)
+    actions = [lab2ind[ni] for ni in actions]
 
-    d = {ni: indi for indi, ni in enumerate(set(actions))}
-    actions = [d[ni] for ni in actions]
-
-    return clips, targets, actions, vocab, config
+    return clips, targets, actions, vocab, config, ind2lab
 
 class FeatureDataset(data.Dataset):
     """Create an instance of IIT-V2C dataset with (features, targets) pre-extracted,

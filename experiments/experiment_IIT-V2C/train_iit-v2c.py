@@ -32,7 +32,7 @@ config = TrainConfig()
 # Setup tf.dataset object
 annotation_file = config.MODE + '.txt'
 action_file = config.MODE+'_actions.txt'
-clips, targets, actions, vocab, config = iit_v2c.parse_dataset(config, annotation_file, action_file)
+clips, targets, actions, vocab, config, ind2lab = iit_v2c.parse_dataset(config, annotation_file, action_file)
 config.display()
 train_dataset = iit_v2c.FeatureDataset(clips, targets, actions)
 train_loader = data.DataLoader(train_dataset, 

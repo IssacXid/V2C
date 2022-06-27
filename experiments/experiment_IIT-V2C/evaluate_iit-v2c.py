@@ -34,7 +34,7 @@ config = TestConfig()
 vocab = pickle.load(open(os.path.join(config.CHECKPOINT_PATH, 'vocab.pkl'), 'rb'))
 annotation_file = config.MODE + '.txt'
 action_file = config.MODE+'_actions.txt'
-clips, targets, actions, _, config = iit_v2c.parse_dataset(config, annotation_file, action_file, vocab=vocab)
+clips, targets, actions, _, config, ind2lab = iit_v2c.parse_dataset(config, annotation_file, action_file, vocab=vocab)
 test_dataset = iit_v2c.FeatureDataset(clips, targets, actions)
 test_loader = data.DataLoader(test_dataset, 
                               batch_size=config.BATCH_SIZE, 
@@ -65,8 +65,8 @@ for checkpoint_file in checkpoint_files:
         pred_command = utils.sequence_to_text(y_pred[i], vocab)
         #print(y_true[i])
         true_command = utils.sequence_to_text(y_true[i], vocab)
-        pred_action = utils.sequence_to_text(y_pred[i], vocab)
-        true_action = utils.sequence_to_text(y_true[i], vocab)
+        pred_action = ind2lab[ac_pred[i]]
+        true_action = ind2lab[ac_true[i]]
         f.write('------------------------------------------\n')
         f.write(str(i) + '\n')
         f.write(pred_command + '\n')
