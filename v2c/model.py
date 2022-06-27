@@ -107,21 +107,25 @@ class TemporalBlock(nn.Module):
 class TemporalConvNet(nn.Module):
     def __init__(self, num_inputs, num_channels, num_classes, kernel_size=2, dropout=0.2):
         super(TemporalConvNet, self).__init__()
-        layers = []
-        num_levels = len(num_channels)
-        for i in range(num_levels):
-            dilation_size = 2 ** i
-            in_channels = num_inputs if i == 0 else num_channels[i - 1]
-            out_channels = num_channels[i]
-            layers += [TemporalBlock(in_channels, out_channels, kernel_size, stride=1, dilation=dilation_size,
-                                     padding=(kernel_size - 1) * dilation_size, dropout=dropout)]
-
-        self.network = nn.Sequential(*layers)
-        self.linear = nn.Linear(num_channels[-1], num_classes)
+        self.conv1 = weight_norm(nn.Conv1d(in_channels=2048, out_channels=2048, kernel_size=3, stride=1, padding='same', dilation=1))
+        self.conv2 = weight_norm(nn.Conv1d(in_channels=2048, out_channels=1024, kernel_size=3, stride=1, padding='same', dilation=2))
+        self.conv3 = weight_norm(nn.Conv1d(in_channels=1024, out_channels=512, kernel_size=3, stride=1, padding='same', dilation=4))
+        self.relu = nn.ReLU()
+        self.pool1 = nn.MaxPool1d(kernel_size=3, stride=None, dilation=1)
+        self.pool2 = nn.MaxPool1d(kernel_size=5, stride=None, dilation=1)
+        self.network = nn.Sequential(
+          self.conv1, self.relu, self.pool1,
+          self.conv2, self.relu, self.pool2,
+          self.conv3,
+        )
+        self.fc1 = nn.Linear(num_channels[-1]*2, 256)
+        self.fc2 = nn.Linear(256, num_classes)
 
     def forward(self, x):
+        x = x.permute((0,2,1))
         x = self.network(x)
-        return self.linear(x)
+        x = torch.flatten(x, start_dim=1)
+        return self.fc2(self.fc1(x))
 
 
 # ----------------------------------------
@@ -325,20 +329,21 @@ class Video2Command():
             
             # Calculate mask against zero-padding
             S_mask = S != 0
-
+            lossCMD, lossCLS = 0.0, 0.0
             # Teacher-Forcing for command decoder
             for timestep in range(self.config.MAXLEN - 1):
                 Xs = S[:,timestep]
                 probs, states = self.command_decoder(Xs, states)
                 # Calculate loss per word
-                loss += self.loss_objective(probs, S[:,timestep+1])
-            loss = loss / S_mask.sum()     # Loss per word
+                lossCMD += self.loss_objectiveCMD(probs, S[:,timestep+1])
+            lossCMD = lossCMD / S_mask.sum()     # Loss per word
             
-            loss += self.loss_objectiveCLS(Xc, Ac)
+            lossCLS += self.loss_objectiveCLS(Xc, Ac)
+            loss = lossCMD + lossCLS
             # Gradient backward
             loss.backward()
             self.optimizer.step()
-            return loss
+            return loss, lossCMD, lossCLS
 
         # Training epochs
         self.video_encoder.train()
@@ -351,13 +356,12 @@ class Video2Command():
                 # Mini-batch
                 Xv, S, Ac = Xv.to(self.device), S.to(self.device), Ac.to(self.device)
                 # Train step
-                loss = train_step(Xv, S, Ac)
+                loss, lossCMD, lossCLS = train_step(Xv, S, Ac)
                 total_loss += loss
                 # Display
                 if i % self.config.DISPLAY_EVERY == 0:
-                    print('Epoch {}, Iter {}, Loss {:.6f}'.format(epoch+1, 
-                                                                  i,
-                                                                  loss))
+                    print('Epoch {}, Iter {}, Loss {:.6f}, LossCMD {:.6f}, LossCLS {:.6f}'.format(epoch+1, i,
+                                                                  loss, lossCMD, lossCLS))
             # End of epoch, save weights
             print('Total loss for epoch {}: {:.6f}'.format(epoch+1, total_loss / (i + 1)))
             if (epoch + 1) % self.config.SAVE_EVERY == 0:
