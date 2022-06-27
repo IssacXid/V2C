@@ -241,7 +241,7 @@ def parse_dataset(config,
     config.VOCAB_SIZE = len(vocab)
     
     if config.MODE == 'train':
-      lab2ind = {ni: indi for indi, ni in enumerate(set(actions))}
+      lab2ind = {ni: indi for indi, ni in enumerate(list(dict.fromkeys(actions)))}
       ind2lab = {value:key for key, value in lab2ind.items()}
       actionDict = {'lab2ind': lab2ind, 'ind2lab': ind2lab}
       with open(os.path.join(config.CHECKPOINT_PATH, 'actionDict.pkl'), 'wb') as f:
@@ -259,9 +259,9 @@ def parse_dataset(config,
     targets = utils.texts_to_sequences(captions, vocab)
     targets = utils.pad_sequences(targets, config.MAXLEN, padding='post')
     targets = targets.astype(np.int64)
-    print(lab2ind)
-    actions = [lab2ind[ni] for ni in actions]
-
+    print(ind2lab)
+    actions = [lab2ind[ni] if ni in lab2ind.keys() else lab2ind['garbage'] for ni in actions]
+    print(actions)
     return clips, targets, actions, vocab, config, ind2lab
 
 class FeatureDataset(data.Dataset):

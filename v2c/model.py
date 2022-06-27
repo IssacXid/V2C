@@ -408,7 +408,6 @@ class Video2Command():
             # Start v2c prediction pipeline
             Ac_pred = torch.argmax(self.tcn(Xv), dim=1)
             Xv, states = self.video_encoder(Xv)
-
             #states = self.command_decoder.reset_states(Xv.shape[0])
             #_, states = self.command_decoder(None, states, Xv=Xv)   # Encode video features 1st
             for timestep in range(self.config.MAXLEN - 1):
