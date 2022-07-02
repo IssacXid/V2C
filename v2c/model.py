@@ -338,7 +338,7 @@ class Video2Command():
                 lossCMD += self.loss_objectiveCMD(probs, S[:,timestep+1])
             lossCMD = lossCMD / S_mask.sum()     # Loss per word
             
-            lossCLS += self.loss_objectiveCLS(Xc, Ac)
+            lossCLS = self.loss_objectiveCLS(Xc, Ac)
             loss = lossCMD + lossCLS
             # Gradient backward
             loss.backward()
@@ -426,6 +426,7 @@ class Video2Command():
         torch.save({
                     'VideoEncoder_state_dict': self.video_encoder.state_dict(),
                     'CommandDecoder_state_dict': self.command_decoder.state_dict(),
+                    'TCN_state_dict':self.tcn.state_dict(),
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     }, os.path.join(self.config.CHECKPOINT_PATH, 'saved', 'v2c_epoch_{}.pth'.format(epoch)))
         print('Model saved.')
@@ -438,5 +439,7 @@ class Video2Command():
         checkpoint = torch.load(save_path)
         self.video_encoder.load_state_dict(checkpoint['VideoEncoder_state_dict'])
         self.command_decoder.load_state_dict(checkpoint['CommandDecoder_state_dict'])
+        self.tcn.load_state_dict(checkpoint['TCN_state_dict']),
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         print('Model loaded.')
+
