@@ -6,7 +6,7 @@ import pickle
 import numpy as np
 
 # Root directory of the project
-ROOT_DIR = os.path.abspath("../../")
+ROOT_DIR = os.path.abspath("/content/V2C/")
 
 # Import v2c utils
 sys.path.append(ROOT_DIR)  # To find local version of the library
@@ -91,11 +91,12 @@ def read_prediction_file(prediction_file):
     lines = f.read().split('\n')
     f.close()
 
-    for i in range(0, len(lines) - 4, 4):
+    for i in range(0, len(lines) - 6, 6):
         id_line = lines[i+1]
-        gt_line = lines[i+2]
-        pd_line = lines[i+3]
-            
+        pd_line = lines[i+2]
+        gt_line = lines[i+3]
+        # pd_action = lines[i+4]
+        # gt_action = lines[i+5]
         # Build individual ground truth dict
         curr_gt_dict = {}
         curr_gt_dict['image_id'] = id_line
