@@ -45,6 +45,10 @@ bias_vector = vocab.get_bias_vector() if config.USE_BIAS_VECTOR else None
 v2c_model = Video2Command(config)
 v2c_model.build(bias_vector)
 
+if os.path.exists(os.path.join(config.CHECKPOINT_PATH, 'saved')):
+  checkpoint_file = os.path.join(config.CHECKPOINT_PATH, 'saved/', 'v2c_epoch_50.pth')
+  v2c_model.load_weights(checkpoint_file)
+
 # Save vocabulary at last
 with open(os.path.join(config.CHECKPOINT_PATH, 'vocab.pkl'), 'wb') as f:
     pickle.dump(vocab, f)

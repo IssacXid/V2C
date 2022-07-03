@@ -118,6 +118,7 @@ class TemporalConvNet(nn.Module):
           self.conv2, self.relu, self.pool2,
           self.conv3,
         )
+        self.dropout = nn.Dropout(0.5)
         self.fc1 = nn.Linear(num_channels[-1]*2, 256)
         self.fc2 = nn.Linear(256, num_classes)
 
@@ -125,6 +126,7 @@ class TemporalConvNet(nn.Module):
         x = x.permute((0,2,1))
         x = self.network(x)
         x = torch.flatten(x, start_dim=1)
+        x = self.dropout(x)
         return self.fc2(self.fc1(x))
 
 
@@ -142,7 +144,8 @@ class VideoEncoder(nn.Module):
         super(VideoEncoder, self).__init__()
         self.linear = nn.Linear(in_size, units)
         self.lstm = nn.LSTM(units, units, batch_first=True)
-        self.reset_parameters()
+        self.dropout = nn.Dropout(0.5)
+        # self.reset_parameters()
 
     def forward(self, 
                 Xv):
@@ -152,7 +155,7 @@ class VideoEncoder(nn.Module):
         Xv = self.linear(Xv)
         #print('linear:', Xv.shape)
         Xv = F.relu(Xv)
-
+        Xv = self.dropout(Xv)
         Xv, (hi, ci) = self.lstm(Xv)
         Xv = Xv[:,-1,:]     # Only need the last timestep
         hi, ci = hi[0,:,:], ci[0,:,:]
@@ -184,10 +187,11 @@ class CommandDecoder(nn.Module):
         self.embed_dim = embed_dim
 
         self.embed = nn.Embedding(vocab_size, embed_dim)
+        self.dropout = nn.Dropout(0.5)
         self.lstm_cell = nn.LSTMCell(embed_dim, units)
         self.logits = nn.Linear(units, vocab_size, bias=True)
         self.softmax = nn.LogSoftmax(dim=1)
-        self.reset_parameters(bias_vector)
+        # self.reset_parameters(bias_vector)
 
     def forward(self, 
                 Xs, 
@@ -199,7 +203,7 @@ class CommandDecoder(nn.Module):
         #print('Xs:', Xs.shape)
         Xs = self.embed(Xs)
         #print('embed:', Xs.shape)
-
+        Xs = self.dropout(Xs)
         hi, ci = self.lstm_cell(Xs, states)
         #print('out:', hi.shape, 'hi:', states[0].shape, 'ci:', states[1].shape)
 
