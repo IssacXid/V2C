@@ -1,4 +1,5 @@
 import os
+from pickle import NONE
 
 import numpy as np
 import torch
@@ -443,6 +444,290 @@ class Video2Command():
         checkpoint = torch.load(save_path)
         self.video_encoder.load_state_dict(checkpoint['VideoEncoder_state_dict'])
         self.command_decoder.load_state_dict(checkpoint['CommandDecoder_state_dict'])
+        self.tcn.load_state_dict(checkpoint['TCN_state_dict']),
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        print('Model loaded.')
+
+
+class EDNet():
+    """Train/Eval inference class for V2C model.
+    """
+    def __init__(self,
+                 config):
+        self.config = config
+        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    
+    def build(self,
+              bias_vector=None):
+        # Initialize Encode & Decode models here
+        self.video_encoder = VideoEncoder(in_size=list(self.config.BACKBONE.values())[0],
+                                          units=self.config.UNITS)
+        self.command_decoder = CommandDecoder(units=self.config.UNITS,
+                                              vocab_size=self.config.VOCAB_SIZE,
+                                              embed_dim=self.config.EMBED_SIZE,
+                                             bias_vector=bias_vector)
+        
+        
+        self.video_encoder.to(self.device)
+        self.command_decoder.to(self.device)
+    
+        # Loss function
+        self.loss_objectiveCMD = CommandLoss()
+        self.loss_objectiveCMD.to(self.device)
+
+        # Setup parameters and optimizer
+        self.params = list(self.video_encoder.parameters()) + \
+                      list(self.command_decoder.parameters())
+        self.optimizer = torch.optim.Adam(self.params, 
+                                          lr=self.config.LEARNING_RATE)
+
+        # Save configuration
+        # Safely create checkpoint dir if non-exist
+        if not os.path.exists(os.path.join(self.config.CHECKPOINT_PATH, 'saved')):
+            os.makedirs(os.path.join(self.config.CHECKPOINT_PATH, 'saved'))
+
+    def train(self, 
+              train_loader):
+        """Train the Video2Command model.
+        """
+        def train_step(Xv, S):
+            """One train step.
+            """
+            loss = 0.0
+            # Zero the parameter gradients
+            self.optimizer.zero_grad()
+
+            # Forward pass
+            # Video feature extraction 1st
+            Xv, states = self.video_encoder(Xv)
+            
+            # Calculate mask against zero-padding
+            S_mask = S != 0
+            # Teacher-Forcing for command decoder
+            for timestep in range(self.config.MAXLEN - 1):
+                Xs = S[:,timestep]
+                probs, states = self.command_decoder(Xs, states)
+                # Calculate loss per word
+                loss += self.loss_objectiveCMD(probs, S[:,timestep+1])
+            loss = loss / S_mask.sum()     # Loss per word
+            
+            # Gradient backward
+            loss.backward()
+            self.optimizer.step()
+            return loss
+
+        # Training epochs
+        self.video_encoder.train()
+        self.command_decoder.train()
+
+        for epoch in range(self.config.NUM_EPOCHS):
+            total_loss = 0.0
+            for i, (Xv, S, _, clip_names) in enumerate(train_loader):
+                # Mini-batch
+                Xv, S = Xv.to(self.device), S.to(self.device)
+                # Train step
+                loss = train_step(Xv, S)
+                total_loss += loss
+                # Display
+                if i % self.config.DISPLAY_EVERY == 0:
+                    print('Epoch {}, Iter {}, Loss {:.6f}'.format(epoch+1, i, loss))
+            # End of epoch, save weights
+            print('Total loss for epoch {}: {:.6f}'.format(epoch+1, total_loss / (i + 1)))
+            if (epoch + 1) % self.config.SAVE_EVERY == 0:
+                self.save_weights(epoch + 1)
+        return
+
+    def evaluate(self,
+                 test_loader,
+                 vocab):
+        """Run the evaluation pipeline over the test dataset.
+        """
+        assert self.config.MODE == 'test'
+        y_pred, y_true = [], []
+        # Evaluation over the entire test dataset
+        for i, (Xv, S_true, _, clip_names) in enumerate(test_loader):
+            # Mini-batch
+            Xv, S_true = Xv.to(self.device), S_true.to(self.device)
+            S_pred = self.predict(Xv, vocab)
+            y_pred.append(S_pred)
+            y_true.append(S_true)
+        y_pred = torch.cat(y_pred, dim=0)
+        y_true = torch.cat(y_true, dim=0)
+        return y_pred.cpu().numpy(), y_true.cpu().numpy()
+
+    def predict(self, 
+                Xv,
+                vocab):
+        """Run the prediction pipeline given one sample.
+        """
+        self.video_encoder.eval()
+        self.command_decoder.eval()
+
+        with torch.no_grad():
+            # Initialize S with '<sos>'
+            S = torch.zeros((Xv.shape[0], self.config.MAXLEN), dtype=torch.long)
+            S[:,0] = vocab('<sos>')
+            S = S.to(self.device)
+
+            Xv, states = self.video_encoder(Xv)
+            #states = self.command_decoder.reset_states(Xv.shape[0])
+            #_, states = self.command_decoder(None, states, Xv=Xv)   # Encode video features 1st
+            for timestep in range(self.config.MAXLEN - 1):
+                Xs = S[:,timestep]
+                probs, states = self.command_decoder(Xs, states)
+                preds = torch.argmax(probs, dim=1)    # Collect prediction
+                S[:,timestep+1] = preds
+        return S
+
+    def save_weights(self, 
+                     epoch):
+        """Save the current weights and record current training info 
+        into tensorboard.
+        """
+        # Save the current checkpoint
+        torch.save({
+                    'VideoEncoder_state_dict': self.video_encoder.state_dict(),
+                    'CommandDecoder_state_dict': self.command_decoder.state_dict(),
+                    'optimizer_state_dict': self.optimizer.state_dict(),
+                    }, os.path.join(self.config.CHECKPOINT_PATH, 'saved', 'v2c_epoch_{}_CMD.pth'.format(epoch)))
+        print('Model saved.')
+
+    def load_weights(self,
+                     save_path):
+        """Load pre-trained weights by path.
+        """
+        print('Loading...')
+        checkpoint = torch.load(save_path)
+        self.video_encoder.load_state_dict(checkpoint['VideoEncoder_state_dict'])
+        self.command_decoder.load_state_dict(checkpoint['CommandDecoder_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        print('Model loaded.')
+
+
+class ActionClassification():
+    """Train/Eval inference class for V2C model.
+    """
+    def __init__(self,
+                 config):
+        self.config = config
+        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    
+    def build(self,
+              bias_vector=None):
+
+        self.kernel_size = 7
+        self.dropout = .5
+
+        self.tcn = TemporalConvNet(
+            self.config.BACKBONE["resnet50"],
+            self.config.CHANNEL_SIZES,
+            self.config.NUM_CLASSES,
+            kernel_size=self.kernel_size,
+            dropout=self.dropout)
+        self.tcn.to(self.device)
+    
+        # Loss function
+        self.loss_objectiveCLS = ClassificationLoss()
+        self.loss_objectiveCLS.to(self.device)
+
+        # Setup parameters and optimizer
+        self.params = list(self.tcn.parameters())
+        self.optimizer = torch.optim.Adam(self.params, 
+                                          lr=self.config.LEARNING_RATE)
+
+        # Save configuration
+        # Safely create checkpoint dir if non-exist
+        if not os.path.exists(os.path.join(self.config.CHECKPOINT_PATH, 'saved')):
+            os.makedirs(os.path.join(self.config.CHECKPOINT_PATH, 'saved'))
+
+    def train(self, 
+              train_loader):
+        """Train the Video2Command model.
+        """
+        def train_step(Xv, Ac):
+            """One train step.
+            """
+            loss = 0.0
+            # Zero the parameter gradients
+            self.optimizer.zero_grad()
+
+            # Forward pass
+            # Classification module
+            Xc = self.tcn(Xv)
+            
+            loss = self.loss_objectiveCLS(Xc, Ac)
+            # Gradient backward
+            loss.backward()
+            self.optimizer.step()
+            return loss
+
+        self.tcn.train()
+
+        for epoch in range(self.config.NUM_EPOCHS):
+            total_loss = 0.0
+            for i, (Xv, _, Ac, clip_names) in enumerate(train_loader):
+                # Mini-batch
+                Xv, Ac = Xv.to(self.device), Ac.to(self.device)
+                # Train step
+                loss = train_step(Xv, Ac)
+                total_loss += loss
+                # Display
+                if i % self.config.DISPLAY_EVERY == 0:
+                    print('Epoch {}, Iter {}, Loss {:.6f}'.format(epoch+1, i, loss))
+            # End of epoch, save weights
+            print('Total loss for epoch {}: {:.6f}'.format(epoch+1, total_loss / (i + 1)))
+            if (epoch + 1) % self.config.SAVE_EVERY == 0:
+                self.save_weights(epoch + 1)
+        return
+
+    def evaluate(self,
+                 test_loader,
+                 vocab=None):
+        """Run the evaluation pipeline over the test dataset.
+        """
+        assert self.config.MODE == 'test'
+        ac_pred, ac_true = [], []
+        # Evaluation over the entire test dataset
+        for i, (Xv, _, Ac_true, clip_names) in enumerate(test_loader):
+            # Mini-batch
+            Xv, Ac_true = Xv.to(self.device), Ac_true.to(self.device)
+            Ac_pred = self.predict(Xv, vocab)
+            ac_pred.append(Ac_pred)
+            ac_true.append(Ac_true)
+        ac_pred = torch.cat(ac_pred, dim=0)
+        ac_true = torch.cat(ac_true, dim=0)
+        return ac_pred.cpu().numpy(), ac_true.cpu().numpy()
+
+    def predict(self, 
+                Xv,
+                vocab=NONE):
+        """Run the prediction pipeline given one sample.
+        """
+        self.tcn.eval()
+
+        with torch.no_grad():
+            # Start v2c prediction pipeline
+            Ac_pred = torch.argmax(self.tcn(Xv), dim=1)
+        return Ac_pred
+
+    def save_weights(self, 
+                     epoch):
+        """Save the current weights and record current training info 
+        into tensorboard.
+        """
+        # Save the current checkpoint
+        torch.save({
+                    'TCN_state_dict':self.tcn.state_dict(),
+                    'optimizer_state_dict': self.optimizer.state_dict(),
+                    }, os.path.join(self.config.CHECKPOINT_PATH, 'saved', 'v2c_epoch_{}_action.pth'.format(epoch)))
+        print('Model saved.')
+
+    def load_weights(self,
+                     save_path):
+        """Load pre-trained weights by path.
+        """
+        print('Loading...')
+        checkpoint = torch.load(save_path)
         self.tcn.load_state_dict(checkpoint['TCN_state_dict']),
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         print('Model loaded.')

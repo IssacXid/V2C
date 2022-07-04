@@ -41,17 +41,43 @@ train_loader = data.DataLoader(train_dataset,
                                num_workers=config.WORKERS)
 bias_vector = vocab.get_bias_vector() if config.USE_BIAS_VECTOR else None
 
-# Setup and build video2command training inference
-v2c_model = Video2Command(config)
-v2c_model.build(bias_vector)
+# # Setup and build video2command training inference
+# v2c_model = Video2Command(config)
+# v2c_model.build(bias_vector)
 
-if os.path.exists(os.path.join(config.CHECKPOINT_PATH, 'saved')):
-  checkpoint_file = os.path.join(config.CHECKPOINT_PATH, 'saved/', 'v2c_epoch_50.pth')
-  v2c_model.load_weights(checkpoint_file)
+# if os.path.exists(os.path.join(config.CHECKPOINT_PATH, 'saved')):
+#   checkpoint_file = os.path.join(config.CHECKPOINT_PATH, 'saved/', 'v2c_epoch_50.pth')
+#   v2c_model.load_weights(checkpoint_file)
+
+# # Save vocabulary at last
+# with open(os.path.join(config.CHECKPOINT_PATH, 'vocab.pkl'), 'wb') as f:
+#     pickle.dump(vocab, f)
+
+# # Start training
+# v2c_model.train(train_loader)
+
+# Setup and build EDNet training inference
+ednet_model = EDNet(config)
+ednet_model.build(bias_vector)
+
+if os.path.exists(os.path.join(config.CHECKPOINT_PATH, 'saved/', 'v2c_epoch_150_CMD.pth')):
+  checkpoint_file = os.path.join(config.CHECKPOINT_PATH, 'saved/', 'v2c_epoch_150_CMD.pth')
+  ednet_model.load_weights(checkpoint_file)
 
 # Save vocabulary at last
 with open(os.path.join(config.CHECKPOINT_PATH, 'vocab.pkl'), 'wb') as f:
     pickle.dump(vocab, f)
 
 # Start training
-v2c_model.train(train_loader)
+ednet_model.train(train_loader)
+
+# Setup and build Action classification training inference
+AClass_model = ActionClassification(config)
+AClass_model.build()
+
+if os.path.exists(os.path.join(config.CHECKPOINT_PATH, 'saved/', 'v2c_epoch_150_action.pth')):
+  checkpoint_file = os.path.join(config.CHECKPOINT_PATH, 'saved/', 'v2c_epoch_150_action.pth')
+  AClass_model.load_weights(checkpoint_file)
+
+# Start training
+AClass_model.train(train_loader)
